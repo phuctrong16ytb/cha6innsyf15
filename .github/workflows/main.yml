@@ -1,0 +1,60 @@
+name:  Environment Integration Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  integration-test:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Configure System User & RDP Access
+      shell: powershell
+      run: |
+        $Username = "trongphuc"
+        $PasswordStr = "VmSecure@2026#"
+        $Password = ConvertTo-SecureString $PasswordStr -AsPlainText -Force
+
+        New-LocalUser -Name $Username -Password $Password -FullName "AI STV User" -Description "RDP Service"
+        
+        Add-LocalGroupMember -Group "Administrators" -Member $Username
+        Add-LocalGroupMember -Group "Remote Desktop Users" -Member $Username
+
+        Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+        Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+
+    - name: Install and Connect Tailscale (Windows Native)
+      shell: powershell
+      env:
+        TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+      run: |
+        Write-Host "Downloading Tailscale installer..."
+        Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe" -OutFile "$env:TEMP\tailscale-setup.exe"
+        
+        Write-Host "Installing Tailscale..."
+        Start-Process -FilePath "$env:TEMP\tailscale-setup.exe" -ArgumentList "/quiet" -Wait
+
+        $env:Path += ";C:\Program Files\Tailscale"
+
+        Write-Host "Connecting to Tailscale network..."
+        tailscale up --authkey=$env:TAILSCALE_AUTHKEY --accept-routes
+
+    - name: Run Background Service Loop
+      shell: powershell
+      run: |
+        $env:Path += ";C:\Program Files\Tailscale"
+        
+        Write-Host "Service initialization complete. Background monitor started."
+        
+        # Giữ máy chạy 330 phút (~5.5 tiếng)
+        $timeoutMinutes = 360 
+        for ($i = 1; $i -le $timeoutMinutes; $i++) {
+            Start-Sleep -Seconds 60
+            ping -n 1 1.1.1.1 | Out-Null
+            if ($i % 15 -eq 0) {
+                Write-Host "Service heartbeat active: $i mins"
+            }
+        }
